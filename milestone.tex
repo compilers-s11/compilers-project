@@ -12,41 +12,83 @@
 \newcommand{\ok}{\text{ ok}}
 \newcommand{\uint}{\text{uint}}
 \newcommand{\bool}{\text{bool}}
-\newcommand{\Global}{\text{global}}
-\newcommand{\local}{\text{local}}
-\newcommand{\const}{\text{const}}
+\newcommand{\Global}{\text{global }}
+\newcommand{\local}{\text{local }}
+\newcommand{\const}{\text{const }}
 \newcommand{\tid}[2]{\text{TID}(#1, #2)}
 
-\newcommand{\Ifte}[3]{\textbf{if} #1 \textbf{then} #2 \textbf{else} #3}
-\newcommand{\for}[5]{\textbf{for} #1 \textbf{in} [#2, #3, #4] \{#5\}}
+\newcommand{\Ifte}[3]{\textbf{if } #1 \textbf{ then } #2 \textbf{ else } #3}
+\newcommand{\for}[5]{\textbf{for } #1 \textbf{ in } [#2, #3, #4] \{#5\}}
 \newcommand{\sync}{\textbf{sync}}
-\newcommand{\decl}[3]{\textbf{decl} #1 #2 \textbf{in} #3}
+\newcommand{\decl}[3]{\textbf{decl } #1\; #2 \textbf{ in } #3}
+\renewcommand{\|}{\:|\:}
 
 \newtheorem{theorem}{Theorem}
 
+\title{15754 Project}
+\author{Salil Joshi \& Cyrus Omar}
+
 \begin{document}
+\maketitle
 \section{Grammar}
+We will work on a simple language that is essentially a simple subset of CUDA.
 Types:
   \begin{align*}
-    \text{T'} := & \text{uint} | \text{int} | \text{float} | \text{bool} \\
-    \text{T} := \Global T' [] | \local T' [] | T' | \const T' | \tid{a}{b} \\
+    \text{T'} &:=  \text{uint} \| \text{int} \| \text{float} \| \text{bool} \\
+    \text{T} &:= \Global T' [] \| \local T' [] \| T' \| \const T' \| \tid{a}{b} \\
   \end{align*}
-Expressions
+Terms
   \begin{align*}
-    e := & x | 1\ldots | tid | bid | a[e] \\
-  \end{align*}
-  \begin{align*}
-    \text{stmt} := & \nil | \text{cmd}; \text{stmt}\\
+    e := & x \| 1\ldots \| tid \| bid \| a[e] \\
+     & \\
+    \text{stmt} := & \nil \| \text{cmd}; \text{stmt}\\
+     & \\
     \text{cmd} := & \Ifte{e}{\text{stmt}}{\text{stmt}} \\
-                  & | \for{x}{e}{e}{e}{\text{stmt}} \\
-                  & | \sync \\
-                  & | x := e \\
-                  & | a[e] := e \\
-                  & | \decl{T}{x}{S}
+                  & \| \for{x}{e}{e}{e}{\text{stmt}} \\
+                  & \| \sync \\
+                  & \| x := e \\
+                  & \| a[e] := e \\
+                  & \| \decl{T}{x}{S}
   \end{align*}
 
+The language is a simple imperative language with a few special features:
+\begin{itemize}
+  \item $tid$ is special variable that holds the thread index of the current thread. Similarly, $bid$ holds the block index.
+  \item Arrays are either $\Global$ or $\local$. Global arrays are stored one the global device memory while local arrays are stored on the block level shared memory
+  \item A block level synchronization primitive, $\sync$ which corresponds to CUDA's \texttt{\_\_syncthreads\_\_}
+  \item $\const$ types. The value of an expression of this type can be computed at compile time.
+  \item $\tid{a}{b}$. An expression of this type has the value $a*\text{tid} + b$ i.e.\ it is an affine transformation of the thread index
+\end{itemize}
+
 \section{Typing}
+We have three typing judgements: 
+\begin{itemize} 
+\item ${\Gamma}/{\Delta} {\vdash} e \of T$ for expressions $e$ states that $e$ has type $T$ in the context ${\Gamma}$. The context ${\Delta}$ collects the set of indices read by $e$ for every global array that $e$ accesses. However, only those indices which are \emph{affine tranformations of the thread index} (i.e.\ have type $\tid{a}{b}$) are collected. ${\Delta}$ will later be used to determine the memory segments that are accessed by the program, which is useful for optimizations like memory coalescing and data sharing. At present we focus on memory coalescing.
+
+\item ${\Gamma}/{\Delta}\_r/{\Delta}\_w {\vdash} C \ok$ for commands $C$ states that the command is well formed and all subexpressions are well typed. In addition, ${\Delta}\_r$ is the set of global array indices \emph{read from} by $C$ and ${\Delta}\_w$ is the set of global array indices \emph{written to} by $C$, similar to ${\Delta}$ in the previous judgement. Once again we only track array indices that are affine transformation of the thread index.
+
+\item ${\Gamma}/{\Delta}\_r/{\Delta}\_w {\vdash} S \ok$ similair to the previous judgement, but for statements.
+\end{itemize}
+
+\subsection{Expressions}
   \begin{mathpar}
+    \inferrule{
+      x \of T {\in} {\Gamma}
+    }{
+      {\Gamma}/{\cdot} {\vdash} x \of T
+    }
+
+    \inferrule{
+    }{
+      {\Gamma} {\vdash} \text{tid} \of \tid{1}{0}
+    }
+
+    \inferrule{
+    }{
+      {\Gamma} {\vdash} \text{bid} \of \uint
+    }
+    \newline
+
     \inferrule{
       {\Gamma}/{\Delta}_r^1 {\vdash} e_1 \of \tid{a_1}{b_1} \\
       {\Gamma}/{\Delta}_r^2 {\vdash} e_2 \of \tid{a_2}{b_2}
@@ -75,6 +117,8 @@ Expressions
       {\Gamma}/(a', (a, b)), {\Delta}_r {\vdash} a[e] : T'
     }
 
+    \newline
+
     \inferrule{
       {\Gamma}/{\Delta} {\vdash} e_1 \of \uint
     }{
@@ -93,52 +137,10 @@ Expressions
       {\Gamma}/{\Delta} {\vdash} e_1 \of T'
     }
 
-    \inferrule{
-    }{
-      {\Gamma} {\vdash} \text{tid} \of \tid{1}{0}
-    }
-
-    \inferrule{
-    }{
-      {\Gamma} {\vdash} \text{bid} \of \uint
-    }
   \end{mathpar}
 
-Statements:
+\subsection{Commands}
   \begin{mathpar}
-    \inferrule{
-      {\Gamma}/{\Delta}_r^1/{\Delta}_w^1 {\vdash} C \ok \\
-      {\Gamma}/{\Delta}_r^2/{\Delta}_w^2 {\vdash} S \ok
-    }{
-      {\Gamma}/{\Delta}_r^1, {\Delta}_r^2 /{\Delta}_w^1, {\Delta}_w^2 {\vdash} C; S \ok
-    }
-
-    \inferrule{
-    }{
-      {\Gamma}/{\cdot}/{\cdot} {\vdash} \nil \ok
-    }
-  \end{mathpar}
-
-Commands: 
-  \begin{mathpar}
-    \inferrule{
-      {\Gamma}/{\Delta}_r^1 {\vdash} e \of \bool \\
-      {\Gamma}/{\Delta}_r^2/{\Delta}_w^2 {\vdash} S_1 \ok \\
-      {\Gamma}/{\Delta}_r^3/{\Delta}_w^3 {\vdash} S_2 \ok \\
-    }{
-      {\Gamma}/ {\bigcup} {\Delta}_r/ {\bigcup}  {\Delta}_w {\vdash} \Ifte{e}{S_1}{S_2} \ok
-    }
-
-
-    \inferrule{
-      {\Gamma}/{\delta}_{r}^{i} {\vdash} e_1/e_2/e_3 \of \text{int} \\
-      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[0/x] \ok \\
-      \ldots \\
-      {\Gamma}/{\Delta}_r^{15}/{\Delta}_w^{15} {\vdash} S[15/x] \ok \\
-    }{
-      {\Gamma}/ {\bigcup} {\Delta}_r {\cup} {\bigcup} {\delta}_r / {\bigcup} {\Delta}_w {\vdash} \for{x}{e_1}{e_2}{e_3}{S} \ok
-    }
-
     \inferrule{
       x\of T, {\Gamma}/{\Delta}_r/{\Delta}_w {\vdash} S \ok
     }{
@@ -154,6 +156,21 @@ Commands:
     }
 
     \inferrule{
+    }{
+      \sync \ok
+    }
+
+\newline
+
+    \inferrule{
+      {\Gamma}/{\Delta}_r^1 {\vdash} e \of \bool \\
+      {\Gamma}/{\Delta}_r^2/{\Delta}_w^2 {\vdash} S_1 \ok \\
+      {\Gamma}/{\Delta}_r^3/{\Delta}_w^3 {\vdash} S_2 \ok \\
+    }{
+      {\Gamma}/ {\bigcup} {\Delta}_r/ {\bigcup}  {\Delta}_w {\vdash} \Ifte{e}{S_1}{S_2} \ok
+    }
+
+    \inferrule{
       x \of T {\in} {\Gamma} \\
       T = \Global T' [] \\
       {\Gamma}/{\Delta}_r^1 {\vdash} e_1 \of \tid{a'}{b'} \\
@@ -162,5 +179,35 @@ Commands:
     }{
       {\Gamma}/ {\bigcup} {\Delta}_r/ (a, (a',b')), {\Delta}_w {\vdash} a[e_1] := e_2 \ok
     }
+
+    \inferrule{
+      {\Gamma}/{\delta}_{r}^{1} {\vdash} e_1 \of \text{int} \\
+      {\Gamma}/{\delta}_{r}^{2} {\vdash} e_2 \of \text{int} \\
+      {\Gamma}/{\delta}_{r}^{3} {\vdash} e_3 \of \text{int} \\
+      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e\_1/x] \ok \\
+      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e\_1 + e\_3/x] \ok \\
+      \ldots \\
+      {\Gamma}/{\Delta}_r^{15}/{\Delta}_w^{15} {\vdash} S[e\_1 + 15*e\_3/x] \ok \\
+    }{
+      {\Gamma}/ {\bigcup} {\Delta}_r {\cup} {\bigcup} {\delta}_r / {\bigcup} {\Delta}_w {\vdash} \for{x}{e_1}{e_2}{e_3}{S} \ok
+    }
   \end{mathpar}
+
+The rule for the \textbf{for} essentially unrolls the first 16 iterations of the loop. If the loop variable is being used in an array index this rule collects the first 16 values that the index can take. The reason is that the same behaviour repeats itself as far as memory coalescing is concerned after the first 16 iterations as the difference in addresses is a multiple of 16 (and there are 16 threads in a half warp)
+
+\subsection{Statements}
+  \begin{mathpar}
+    \inferrule{
+      {\Gamma}/{\Delta}_r^1/{\Delta}_w^1 {\vdash} C \ok \\
+      {\Gamma}/{\Delta}_r^2/{\Delta}_w^2 {\vdash} S \ok
+    }{
+      {\Gamma}/{\Delta}_r^1, {\Delta}_r^2 /{\Delta}_w^1, {\Delta}_w^2 {\vdash} C; S \ok
+    }
+
+    \inferrule{
+    }{
+      {\Gamma}/{\cdot}/{\cdot} {\vdash} \nil \ok
+    }
+  \end{mathpar}
+
 \end{document}
