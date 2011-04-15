@@ -63,11 +63,11 @@ The language is a simple imperative language with a few special features:
 \section{Typing}
 We have three typing judgements: 
 \begin{itemize} 
-\item ${\Gamma}/{\Delta} {\vdash} e \of T$ for expressions $e$ states that $e$ has type $T$ in the context ${\Gamma}$. The context ${\Delta}$ collects the set of indices read by $e$ for every global array that $e$ accesses. However, only those indices which are \emph{affine tranformations of the thread index} (i.e.\ have type $\tid{a}{b}$) are collected. ${\Delta}$ will later be used to determine the memory segments that are accessed by the program, which is useful for optimizations like memory coalescing and data sharing. At present we focus on memory coalescing.
+\item ${\Gamma}/{\Delta} {\vdash} e \of T$ for expressions $e$ states that $e$ has type $T$ in the context ${\Gamma}$. The context ${\Delta}$ collects the set of indices read by $e$ for every global array that $e$ accesses. However, only those indices which are \emph{affine transformations of the thread index} (i.e.\ have type $\tid{a}{b}$) are collected. ${\Delta}$ will later be used to determine the memory segments that are accessed by the program, which is useful for optimizations like memory coalescing and data sharing. At present we focus on memory coalescing.
 
-\item ${\Gamma}/{\Delta}\_r/{\Delta}\_w {\vdash} C \ok$ for commands $C$ states that the command is well formed and all subexpressions are well typed. In addition, ${\Delta}\_r$ is the set of global array indices \emph{read from} by $C$ and ${\Delta}\_w$ is the set of global array indices \emph{written to} by $C$, similar to ${\Delta}$ in the previous judgement. Once again we only track array indices that are affine transformation of the thread index.
+\item ${\Gamma}/{\Delta}_r/{\Delta}_w {\vdash} C \ok$ for commands $C$ states that the command is well formed and all subexpressions are well typed. In addition, ${\Delta}_r$ is the set of global array indices \emph{read from} by $C$ and ${\Delta}_w$ is the set of global array indices \emph{written to} by $C$, similar to ${\Delta}$ in the previous judgement. Once again we only track array indices that are affine transformation of the thread index.
 
-\item ${\Gamma}/{\Delta}\_r/{\Delta}\_w {\vdash} S \ok$ similair to the previous judgement, but for statements.
+\item ${\Gamma}/{\Delta}_r/{\Delta}_w {\vdash} S \ok$ similar to the previous judgement, but for statements.
 \end{itemize}
 
 \subsection{Expressions}
@@ -184,10 +184,10 @@ We have three typing judgements:
       {\Gamma}/{\delta}_{r}^{1} {\vdash} e_1 \of \text{int} \\
       {\Gamma}/{\delta}_{r}^{2} {\vdash} e_2 \of \text{int} \\
       {\Gamma}/{\delta}_{r}^{3} {\vdash} e_3 \of \text{int} \\
-      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e\_1/x] \ok \\
-      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e\_1 + e\_3/x] \ok \\
+      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e_1/x] \ok \\
+      {\Gamma}/{\Delta}_r^0/{\Delta}_w^0 {\vdash} S[e_1 + e_3/x] \ok \\
       \ldots \\
-      {\Gamma}/{\Delta}_r^{15}/{\Delta}_w^{15} {\vdash} S[e\_1 + 15*e\_3/x] \ok \\
+      {\Gamma}/{\Delta}_r^{15}/{\Delta}_w^{15} {\vdash} S[e_1 + 15*e_3/x] \ok \\
     }{
       {\Gamma}/ {\bigcup} {\Delta}_r {\cup} {\bigcup} {\delta}_r / {\bigcup} {\Delta}_w {\vdash} \for{x}{e_1}{e_2}{e_3}{S} \ok
     }
