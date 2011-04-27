@@ -1,0 +1,286 @@
+\documentclass{article}
+\usepackage[hmargin=1cm]{geometry}
+\usepackage{amsthm}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathpartir}
+\newcommand{\nil}{\langle\rangle}
+\newcommand{\entails}{\vdash}
+\newcommand{\sentails}{\Vdash}
+\newcommand{\of}{\!:\!}
+\newcommand{\ok}{\text{ ok}}
+\newcommand{\uint}{\text{uint}}
+\newcommand{\bool}{\text{bool}}
+\newcommand{\Global}{\textbf{global }}
+\newcommand{\local}{\textbf{local }}
+\newcommand{\const}{\textbf{const }}
+\newcommand{\id}[3]{\textbf{ID}(#1, #2, #3)}
+
+\newcommand{\Ifte}[3]{\textbf{if } #1 \textbf{ then } #2 \textbf{ else } #3}
+\newcommand{\for}[5]{\textbf{for } #1 \textbf{ in } [#2, #3, #4] \{#5\}}
+\newcommand{\sync}{\textbf{sync}}
+\newcommand{\decl}[3]{\textbf{decl } #1\; #2 \textbf{ in } #3}
+\renewcommand{\|}{\:|\:}
+
+\newtheorem{theorem}{Theorem}
+
+\title{15754 Project}
+\author{Salil Joshi \& Cyrus Omar}
+
+\begin{document}
+\maketitle
+\section{Introduction}
+Modern graphics processing units (GPUs) have for the first time made high performance parallel computing affordable and widely available. GPUs are being rapidly adopted for use in applications that would otherwise require large computing clusters and an increasing number of programmers find themselves writing code for GPUs. However, GPU program optimization is currently done largely by hand. Optimizing compilers for GPUs are a fairly recent development and the literature on formal methods for performing the analyses required for GPU program optimization is sparse.
+
+
+In this project, we describe a formal system for analyzing GPGPU programs in order to determine what optimizations are applicable. Our system tracks and analyzes array access patterns in OpenCL programs. In particular, we track array accesses that are linear polynomials of the thread and block indices. This form of array access is extremely common in GPGPU programming, and thus an important potential point of optimization.
+
+
+We define a simple language (that is essentially a subset of OpenCL) and a type system for this language. The type system has a novel type $\id{a}{b}{c}$ for thread and block indices. The process of assigning types to terms in this language builds up contexts that contain a list of array accesses through the use of this $\id{a}{b}{c}$ type. We utilize this information in order to determine the array indices and memory segments accessed by a half warp. We can then determine the coalescing behavior of threads in the program, and identify potential data sharing between threads in different blocks or even in different kernels. 
+
+
+If uncoalesced accesses are identified by our system, a program transformation like the one described in \cite{pldi10} can be used to convert these to coalesced accesses, which can provide a significant speedup. Data sharing information can be used to make decisions about merging adjacent blocks or corresponding threads in different blocks or different kernels. Here a speedup is obtained by using the block-local shared memory for shared data segments.
+
+
+Our main contributions are: 
+\begin{itemize}
+  \item We have developed a formal system to track array accesses that are linear polynomials of thread and block ids.
+  \item Our system formalizes the analyses used in \cite{pldi10} for intra-kernel optimizations like memory coalescing and thread/block merging.
+  \item We show how our system could be used for \emph{kernel merging}.
+\end{itemize}
+
+\subsection{Related Work}
+Recently there has been a lot of interest in developing optimizing compilers for GPUs \cite{pldi10}, \cite{cuda-lite}. The analysis used in these approaches in order to identify applicable optimizations is quite similar in spirit to ours. Unfortunately these papers only provide informal descriptions of the analyses they use. A major goal of this project was to design a formal system that can adequately capture the analyses required for such optimizations, especially the ones presented in \cite{pldi10}
+
+Similar analyses has also been done in the context of analytical modeling of performance of GPU programs, for example in \cite{adaptive}. Other methodologies for performance modeling such as \cite{analytical} also require an underlying system to perform these kinds of analyses. However the goals and scope of our analyses are somewhat different. For example, knowing when memory accesses are coalesced is crucial for performance modeling, but identifying \emph{potential} points of data sharing is not. Performance modeling also requires reasoning about other factors (such as register usage) which our system does not deal with.
+
+In general, array access analyses is also done by CPU compilers. The techniques used there may be beneficial for GPUs as well. Our focus however was on those aspects of array accesses which are unique to GPGPU computation: accesses involving thread and block indices, for which there is no direct parallel on CPUs.
+
+
+\section{Analyzing Array Accesses}
+\subsection{Grammar}
+We will work on a language that is essentially a simple subset of OpenCL.\\
+Types:
+  \begin{align*}
+    \text{T'} &:=  \text{uint} \| \text{int} \| \text{float} \| \text{bool} \\
+    \text{T} &:= \Global T' [] \| \local T' [] \| T' \| \const T' \| \id{a}{b}{c} \\
+  \end{align*}
+Terms
+  \begin{align*}
+    e := & x \| 1\ldots \| tid \| bid \| a[e] \\
+     & \\
+    \text{stmt} := & \nil \| \text{cmd}; \text{stmt}\\
+     & \\
+    \text{cmd} := & \Ifte{e}{\text{stmt}}{\text{stmt}} \\
+                  & \| \for{x}{e}{e}{e}{\text{stmt}} \\
+                  & \| \sync \\
+                  & \| x := e \\
+                  & \| a[e] := e \\
+                  & \| \decl{T}{x}{\text{stmt}}
+  \end{align*}
+
+The language is a simple imperative language with a few special features:
+\begin{itemize}
+  \item $tid$ is special variable that holds the thread index of the current thread. Similarly, $bid$ holds the block index.
+  \item Arrays are either \textbf{global} or \textbf{local}. \textbf{global} arrays are stored on the global device memory while \textbf{local} arrays are stored on the block level shared memory
+  \item A block level synchronization primitive, $\sync$ which corresponds to OpenCL's \texttt{\_\_syncthreads\_\_}
+  \item $\const$ types. The value of an expression of this type can be computed at compile time.
+  \item $\id{a}{b}{c}$. An expression of this type has the value $a*\text{tid} + b*\text{bid} + c$ i.e.\ it is a linear polynomial in the thread and block indices.
+\end{itemize}
+
+\subsection{Typing}
+We have three typing judgements: 
+\begin{itemize} 
+\item $\Gamma/\Delta \vdash e \of T$ for expressions $e$ states that $e$ has type $T$ in the context $\Gamma$. The context $\Delta$ collects the set of indices used by $e$ for every global array that $e$ accesses (reads from). However, only those indices which are \emph{linear polynomials in tid and bid} (i.e.\ have type $\id{a}{b}{c}$) are collected. $\Delta$ will later be used to determine the memory segments that are accessed by the program, which is useful for optimizations like memory coalescing and data sharing.
+
+\item $\Gamma/\Delta_r/\Delta_w \vdash C \ok$ for commands $C$ states that the command is well formed and all subexpressions are well typed. In addition, $\Delta_r$ is the set of global array indices \emph{read from} by $C$ and $\Delta_w$ is the set of global array indices \emph{written to} by $C$, similar to $\Delta$ in the previous judgement. Once again we only track array indices that are linear polynomials in tid and bid.
+
+\item $\Gamma/\Delta_r/\Delta_w \vdash S \ok$ similar to the previous judgement, but for statements.
+\end{itemize}
+
+\subsubsection{Expressions}
+  \begin{mathpar}
+    \inferrule{
+      x \of T {\in} {\Gamma}
+    }{
+      \Gamma/\cdot \vdash x \of T
+    }
+
+    \inferrule{
+    }{
+      \Gamma \vdash \text{tid} \of \id{1}{0}{0}
+    }
+
+    \inferrule{
+    }{
+      \Gamma \vdash \text{bid} \of \id{0}{1}{0}
+    }
+    \newline
+
+    \inferrule{
+      \Gamma/\Delta_1 \vdash e_1 \of \id{a_1}{b_1}{c_1} \\
+      \Gamma/\Delta_2 \vdash e_2 \of \id{a_2}{b_2}{c_2}
+    }{
+      \Gamma/\Delta_1 \cup \Delta_2 \vdash e_1 + e_2 \of \id{a_1 + a_2}{b_1 + b_2}{c_1 + c_2}
+    }
+
+    \inferrule{
+      \Gamma/\Delta_1 \vdash e_1 \of \id{0}{0}{c'}\\
+      \Gamma/\Delta_2 \vdash e_2 \of \id{a}{b}{c} \\
+    }{
+      \Gamma/\Delta_1 \cup \Delta_2 \vdash e_1 * e_2 \of \id{a*c'}{b*c'}{c*c'}
+    }
+
+    \inferrule{
+      \Gamma \vdash a : \Global T' [] \\
+      \Gamma/\Delta \vdash e \of \uint
+    }{
+      \Gamma/\Delta \vdash a[e] : T'
+    }
+
+    \inferrule{
+      \Gamma/\Delta \vdash a : \Global T' [] \\
+      \Gamma/\Delta \vdash e \of \id{a'}{b'}{c'}
+    }{
+      \Gamma/(a, (a', b', c')), \Delta \vdash a[e] : T'
+    }
+
+    \newline
+
+    \inferrule{
+      \Gamma/\Delta \vdash e_1 \of \uint
+    }{
+      \Gamma/\Delta \vdash e_1 \of \text{int}
+    }
+
+    \inferrule{
+      \Gamma/\Delta \vdash e_1 \of \const \uint
+    }{
+      \Gamma/\Delta \vdash e_1 \of \id{0}{0}{e_1}
+    }
+
+    \inferrule{
+      \Gamma/\Delta \vdash e_1 \of \const T'
+    }{
+      \Gamma/\Delta \vdash e_1 \of T'
+    }
+  \end{mathpar}
+
+\subsubsection{Commands}
+  \begin{mathpar}
+    \inferrule{
+      x\of T, \Gamma/\Delta_r/\Delta_w \vdash S \ok
+    }{
+      \Gamma/\Delta_r/\Delta_w \vdash \decl{T}{x}{S} \ok
+    }
+
+    \inferrule{
+      x \of T \in \Gamma \\
+      T \texttt{scalar} \\
+      \Gamma/\Delta_r \vdash e \of T \\
+    }{
+      \Gamma/\Delta_r/ \cdot \vdash x := e \ok
+    }
+
+    \inferrule{
+    }{
+      \Gamma/ \cdot / \cdot \vdash\sync \ok
+    }
+
+\newline
+
+    \inferrule{
+      \Gamma/\Delta_r^1 \vdash e \of \bool \\
+      \Gamma/\Delta_r^2/\Delta_w^2 \vdash S_1 \ok \\
+      \Gamma/\Delta_r^3/\Delta_w^3 \vdash S_2 \ok \\
+    }{
+      \Gamma/ \Delta_r^1 \cup\Delta_r^2 \cup\Delta_r^3 / \Delta_w^2 \cup\Delta_w^3  \vdash \Ifte{e}{S_1}{S_2} \ok
+    }
+    \newline
+
+    \inferrule{
+      x \of T \in \Gamma \\
+      T = \Global T' [] \\
+      \Gamma/\Delta_r^1 \vdash e_1 \of \uint\\
+      \Gamma/\Delta_r^2 \vdash e_2 \of T' \\
+    }{
+      \Gamma/ \Delta_r^1 \cup\Delta_r^2 / \cdot \vdash a[e_1] := e_2 \ok
+    }
+
+
+    \inferrule{
+      x \of T \in \Gamma \\
+      T = \Global T' [] \\
+      \Gamma/\Delta_r^1 \vdash e_1 \of \id{a'}{b'}{c'} \\
+      \Gamma/\Delta_r^2 \vdash e_2 \of T' \\
+    }{
+      \Gamma/ \Delta_r^1 \cup\Delta_r^2/ (a, (a',b', c')) \vdash a[e_1] := e_2 \ok
+    }
+
+    \inferrule{
+      \Gamma/\delta_r^1 \vdash e_1 \of \text{int} \\
+      \Gamma/\delta_r^2 \vdash e_2 \of \text{int} \\
+      \Gamma/\delta_r^3 \vdash e_3 \of \text{int} \\
+      \Gamma/\Delta_r^0/\Delta_w^0 \vdash S[e_1/x] \ok \\
+      \Gamma/\Delta_r^1/\Delta_w^1 \vdash S[e_1 + e_3/x] \ok \\
+      \ldots \\
+      \Gamma/\Delta_r^{15}/\Delta_w^{15} \vdash S[e_1 + 15*e_3/x] \ok \\
+    }{
+      \Gamma/ \bigcup \Delta_r \cup \bigcup \delta_r / \bigcup \Delta_w \vdash \for{x}{e_1}{e_2}{e_3}{S} \ok
+    }
+  \end{mathpar}
+
+The rule for the \textbf{for} essentially unrolls the first 16 iterations of the loop. If the loop variable is being used in an array index this rule collects the first 16 values that the index can take. The reason is that the same behavior repeats itself as far as memory coalescing is concerned after the first 16 iterations as the difference in addresses is a multiple of 16 (and there are 16 threads in a half warp)
+
+\subsubsection{Statements}
+  \begin{mathpar}
+    \inferrule{
+      \Gamma/\Delta_r^1/\Delta_w^1 \vdash C \ok \\
+      \Gamma/\Delta_r^2/\Delta_w^2 \vdash S \ok
+    }{
+      \Gamma/\Delta_r^1 \cup \Delta_r^2 /\Delta_w^1 \cup \Delta_w^2 \vdash C; S \ok
+    }
+
+    \inferrule{
+    }{
+      \Gamma/\cdot/\cdot \vdash \nil \ok
+    }
+  \end{mathpar}
+
+
+\subsection{Applications}
+\subsubsection{Memory Coalescing}
+In order to check if an array access is coalesced, we simply substitute 0 through 15 for tid. This tells us the memory locations accessed by a half warp (in fact the first half warp, but the pattern repeats itself for every half warp). Then, the original access was coalesced if the resulting accesses cover an entire memory segment. 
+
+
+\subsubsection{Thread/Block Merging}
+If two neighbouring thread blocks access some memory segments in common, it can be useful to combine the two blocks into one either by merging the two blocks by doubling the number of threads in a block or by merging corresponding threads in neighbouring blocks. 
+
+For each array, our system will generate a list of accesses in terms of tid and bid. A second such list is obtained by substituting tid + 1 for tid and bid + 1 for bid (in practice this means converting the access $(a,b,c)$ to $(a,b,c+a+b)$). Then for each list we can determine the memory segments that the accesses lie in (the exact memory locations are not important). If the two lists have some segments in common, then corresponding threads in neighbouring blocks can be merged.
+
+More generally, we can obtain a second list of accesses for each array by substituting bid + 1 for bid. Then, for each list we can determine the \emph{range} of memory segments accessed by that list for all threads in the block. If the ranges for the two lists are overlapping, then this means that neighbouring blocks can be merged.
+
+
+\subsubsection{Kernel Merging}
+Real GPGPU applications often consist of multiple GPU kernels. These kernels can sometimes access the same array segments. In these cases, merging two kernels into one (by merging corresponding threads) can be beneficial because the shared data can be read from global memory just once by using shared memory as a cache.
+
+Kernel merging has previously been proposed by \cite{kernel-fusion}. However their focus is on reducing power consumption, and not on performance. By identifying shared data segments across kernels, our analysis enables a kernel merging transformation that reduces the total number of global memory accesses.
+
+Consider a pair of kernels which both read from the same array (or arrays) but do not have any data dependencies. Using our method of array access analysis, it is possible to determine when corresponding threads in different kernels access the same memory segments. In this case, a very simple transformation can be used to merge the two kernel into one: simply combine corresponding threads, load the shared segments into shared memory and rewrite global accesses to accesses from the shared memory. This transformation is likely to increase performance since a pair of global memory accesses have now been converted into a single global memory access (and a pair of shared memory accesses).
+
+
+\section{Conclusions and Future Work}
+We have a devised a type system for a simple GPGPU language that allows us to track array accesses that are linear polynomials of the thread and block indices. We have demonstrated how this can be used to inform the decisions of an optimizing GPGPU compiler. Our present formalism already allows us to analyze some of the GPGPU optimizations found in the literature (for example those in \cite{pldi10}). At the same time, there are many possible directions in which this system could be extended:
+\begin{itemize}
+\item 
+Currently our system deals only with single dimensional arrays and single dimensional thread and block indices. Both these assumptions are quite restrictive in terms of the programs we can analyze. However, we foresee no fundamental difficulty in extending our approach to remove these restrictions.
+
+\item
+Our system allows us to analyze the applicability of one type of kernel merging optimization. However we haven't yet implemented this optimization. Furthermore, we have identified \emph{one} scenario where data sharing information can be used to merge kernels; there may be others. We believe this is a promising avenue for future research.
+
+\item
+Systems such as CUDA-lite \cite{cuda-lite} rely on programmer supplied annotations in order to analyze program behavior. This approach is complementary to ours. Programmer specified \emph{type} annotations in systems similar to ours may allow more precise and/or more complete analyses.
+\end{itemize}
+\bibliography{references}{}
+\bibliographystyle{plain}
+\end{document}
